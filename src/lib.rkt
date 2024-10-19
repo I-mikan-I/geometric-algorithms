@@ -24,7 +24,11 @@
                          [23tree-split
                           (-> 23tree-balanced? point? (and/c 23tree-balanced? (not/c 23tree-empty?)))]
                          [23tree-remove (-> 23tree-balanced? point? 23tree-balanced?)]
-                         [23tree-inorder (-> 23tree-balanced? list?)])))
+                         [23tree-inorder (-> 23tree-balanced? list?)]
+                         [23tree-get-triple
+                          (-> 23tree-balanced?
+                              point?
+                              (values (or/c point? #f) (or/c point? #f) (or/c point? #f)))])))
 
 (define ((dist p1) p2)
   (match-define-values ((cons x1 y1) (cons x2 y2)) (values p1 p2))
@@ -179,6 +183,41 @@
       [(node3 l k1 m k2 r) (append (rec l) `(,k1) (rec m) `(,k2) (rec r))]
       [v `(,v)])))
 
+(define (_23tree-get-triple t v cmp?)
+  (match t
+    [#f (values #f #f #f)]
+    [(struct point _) (values #f t #f)]
+    [(node2 l k r)
+     (cond
+       [(cmp? k v)
+        (match/values (_23tree-get-triple l v cmp?)
+                      [(_ #f _) (values #f #f #f)]
+                      [(f s t) (let ([t_ (or t (breakpoint-p2 k))]) (values f s t_))])]
+       [else
+        (match/values (_23tree-get-triple r v cmp?)
+                      [(_ #f _) (values #f #f #f)]
+                      [(f s t) (let ([f_ (or f (breakpoint-p1 k))]) (values f_ s t))])])]
+    [(node3 l k1 m k2 r)
+     (cond
+       [(cmp? k1 v)
+        (match/values (_23tree-get-triple l v cmp?)
+                      [(_ #f _) (values #f #f #f)]
+                      [(f s t) (let ([t_ (or t (breakpoint-p2 k1))]) (values f s t_))])]
+       [(cmp? k2 v)
+        (match/values (_23tree-get-triple m v cmp?)
+                      [(_ #f _) (values #f #f #f)]
+                      [(f s t)
+                       (let ([f_ (or f (breakpoint-p1 k1))]
+                             [t_ (or t (breakpoint-p2 k2))])
+                         (values f_ s t_))])]
+       [else
+        (match/values (_23tree-get-triple r v cmp?)
+                      [(_ #f _) (values #f #f #f)]
+                      [(f s t) (let ([f_ (or f (breakpoint-p1 k2))]) (values f_ s t))])])]))
+
+(define/match (23tree-get-triple t v)
+  [((root cmp? _ t) v) (_23tree-get-triple t v cmp?)])
+
 (define (_23tree-remove t v cmp? combine-keys)
   (define combine-inst (combine combine-keys))
   (match t
@@ -247,8 +286,10 @@
   (let ([bp-x (breakpoint->x bp l)])
     (printf "got bp-x: ~v\n" bp-x)
     (< (point-x p) bp-x)))
+
 (define/match (breakpoint-merge l r)
   [((breakpoint l1 _) (breakpoint _ r2)) (breakpoint l1 r2)])
+
 (define (voronoi . p)
   (define l (box 0))
   (define (bp-cmp breakpoint site)
@@ -294,7 +335,10 @@
      (lambda (x)
        (* (/ 1 (* 2 (- y1 l))) (+ (* x x) (- (* 2 x1 x)) (* x1 x1) (* y1 y1) (- (* l l)))))])
   (plot (map (lambda (p) (function (arc p 8.99) 0 200 #:y-min 0 #:y-max 400)) points))
-  (printf "inorder: ~v\n" (23tree-inorder t)))
+  (printf "inorder: ~v\n" (23tree-inorder t))
+  (printf "get-triple ~v ~v\n"
+          (raw:point 11 9)
+          (call-with-values (lambda () (23tree-get-triple t (raw:point 11 8.99))) list)))
 
 (module+ test
   (define data '((0 . 1) (5 . 1) (8 . 1) (100 . 1) (101 . 1) (-20 . 1)))
