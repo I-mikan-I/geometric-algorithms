@@ -7,6 +7,25 @@
 
 (provide (all-defined-out))
 
+(module* debug racket
+  (require (submod ".."))
+  (provide (prefix-out raw: (all-from-out (submod ".."))))
+  (provide (contract-out [23tree-empty? (-> any/c boolean?)]
+                         [23tree-balanced? (-> any/c boolean?)]
+                         [breakpoint? (-> any/c boolean?)]
+                         [point? (-> any/c boolean?)]
+                         [breakpoint->x (-> breakpoint? number? number?)]
+                         [cmp-bp-p (-> breakpoint? point? number? boolean?)]
+                         [breakpoint-merge (-> breakpoint? breakpoint? breakpoint?)]
+                         [23tree
+                          (-> (-> breakpoint? point? boolean?)
+                              (-> breakpoint? breakpoint? breakpoint?)
+                              (and/c 23tree-empty? 23tree-balanced?))]
+                         [23tree-split
+                          (-> 23tree-balanced? point? (and/c 23tree-balanced? (not/c 23tree-empty?)))]
+                         [23tree-remove (-> 23tree-balanced? point? 23tree-balanced?)]
+                         [23tree-inorder (-> 23tree-balanced? list?)])))
+
 (define ((dist p1) p2)
   (match-define-values ((cons x1 y1) (cons x2 y2)) (values p1 p2))
   (sqrt ((sqr (abs (x1 . - . x2))) . + . (sqr (abs (y1 . - . y2))))))
@@ -143,7 +162,9 @@
     [#f (TI v)]
     [(struct point _) (OF3 t (breakpoint t v) v (breakpoint v t) t)]
     [(struct node2 (l k r))
-     (if (cmp? k v) (balance (_23tree-split l v cmp?) k r) (balance l k (_23tree-split r v cmp?)))]
+     (if (cmp? k v)
+         (balance (_23tree-split l v cmp?) k r)
+         (balance l k (_23tree-split r v cmp?)))]
     [(struct node3 (l k1 m k2 r))
      (cond
        [(cmp? k1 v) (balance (_23tree-split l v cmp?) k1 m k2 r)]
@@ -239,7 +260,10 @@
 
   (define site-event
     (match-lambda
-      [(point x y removed) (if (23tree-empty? tree) (23tree-split (point x y removed)) (void))]))
+      [(point x y removed)
+       (if (23tree-empty? tree)
+           (23tree-split (point x y removed))
+           (void))]))
 
   (let while ([queue queue]
               [tree tree]
@@ -248,30 +272,17 @@
         (void)
         (let ([next (bh:find-min/max queue)]
               [queue (bh:delete-min/max queue)])
-          (if (point? next) ((site-event p) tree queue l) (while queue tree))))))
+          (if (point? next)
+              ((site-event p) tree queue l)
+              (while queue tree))))))
+
 (module* test-tree racket
-  (require (submod "..")
-           (contract-in (submod "..")
-                        [23tree-empty? (-> any/c boolean?)]
-                        [23tree-balanced? (-> any/c boolean?)]
-                        [breakpoint? (-> any/c boolean?)]
-                        [point? (-> any/c boolean?)]
-                        [breakpoint->x (-> breakpoint? number? number?)]
-                        [cmp-bp-p (-> breakpoint? point? number? boolean?)]
-                        [breakpoint-merge (-> breakpoint? breakpoint? breakpoint?)]
-                        [23tree
-                         (-> (-> breakpoint? point? boolean?)
-                             (-> breakpoint? breakpoint? breakpoint?)
-                             (and/c 23tree-empty? 23tree-balanced?))]
-                        [23tree-split
-                         (-> 23tree-balanced? point? (and/c 23tree-balanced? (not/c 23tree-empty?)))]
-                        [23tree-remove (-> 23tree-balanced? point? 23tree-balanced?)]
-                        [23tree-inorder (-> 23tree-balanced? list?)]))
+  (require (submod ".." debug))
   (require plot)
 
   (plot-new-window? #t)
-  (define t (23tree (lambda (bp p) (cmp-bp-p bp p (point-y p))) breakpoint-merge))
-  (define points (list (point 5 14) (point 15 12) (point 25 10) (point 13 9)))
+  (define t (23tree (lambda (bp p) (cmp-bp-p bp p (raw:point-y p))) breakpoint-merge))
+  (define points (list (raw:point 5 14) (raw:point 15 12) (raw:point 25 10) (raw:point 13 9)))
   (set! t
         (for/fold ([t t]) ([p points])
           (printf "inorder: ~v\n" (23tree-inorder t))
@@ -279,7 +290,7 @@
 
   (define/match (arc p l)
     ; y = (1/2(y1 - l)) * (x^2 -2x1*x + y1^2 + x1^2 -l^2)
-    [((point x1 y1 _) l)
+    [((raw:point x1 y1 _) l)
      (lambda (x)
        (* (/ 1 (* 2 (- y1 l))) (+ (* x x) (- (* 2 x1 x)) (* x1 x1) (* y1 y1) (- (* l l)))))])
   (plot (map (lambda (p) (function (arc p 8.99) 0 200 #:y-min 0 #:y-max 400)) points))
