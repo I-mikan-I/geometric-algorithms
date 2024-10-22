@@ -66,8 +66,11 @@
             [_ min_dist])))))
 
 ;; voronoi diagrams
-(struct point (x y [removed #:auto #:mutable]) #:auto-value #t #:transparent)
+(struct point (x y [removed #:auto #:mutable])
+  #:auto-value #f
+  #:transparent)
 (struct breakpoint (p1 p2) #:transparent)
+(struct circle (x y bp [removed #:auto #:mutable]) #:auto-value #f #:transparent)
 
 (struct root (cmp? combine-keys t))
 (struct node2 (l k r))
@@ -166,9 +169,7 @@
     [#f (TI v)]
     [(struct point _) (OF3 t (breakpoint t v) v (breakpoint v t) t)]
     [(struct node2 (l k r))
-     (if (cmp? k v)
-         (balance (_23tree-split l v cmp?) k r)
-         (balance l k (_23tree-split r v cmp?)))]
+     (if (cmp? k v) (balance (_23tree-split l v cmp?) k r) (balance l k (_23tree-split r v cmp?)))]
     [(struct node3 (l k1 m k2 r))
      (cond
        [(cmp? k1 v) (balance (_23tree-split l v cmp?) k1 m k2 r)]
@@ -183,40 +184,149 @@
       [(node3 l k1 m k2 r) (append (rec l) `(,k1) (rec m) `(,k2) (rec r))]
       [v `(,v)])))
 
-(define (_23tree-get-triple t v cmp?)
+(define (_rightmost-val t)
   (match t
-    [#f (values #f #f #f)]
-    [(struct point _) (values #f t #f)]
+    [(node2 l k r) (_rightmost-val r)]
+    [(node3 l k1 m k2 r) (_rightmost-val r)]
+    [val val]))
+
+(define (_leftmost-val t)
+  (match t
+    [(node2 l k r) (_leftmost-val l)]
+    [(node3 l k1 m k2 r) (_leftmost-val l)]
+    [val val]))
+
+(define (_23tree-left-val t p cmp?)
+  (match t
+    [(node2 lt k rt)
+     (cond
+       [(cmp? k p) (_23tree-left-val lt p cmp?)]
+       [else (or (_23tree-left-val rt p cmp?) (_leftmost-val lt))])]
+    [(node3 lt k1 mt k2 rt)
+     (cond
+       [(cmp? k1 p) (_23tree-left-val lt p cmp?)]
+       [(cmp? k2 p) (or (_23tree-left-val mt p cmp?) (_rightmost-val lt))]
+       [else (or (_23tree-left-val rt p cmp?) (_rightmost-val mt))])]
+    [val #f]))
+
+(define (_23tree-right-val t p cmp?)
+  (match t
+    [(node2 lt k rt)
+     (cond
+       [(cmp? k p) (or (_23tree-right-val lt p cmp?) (_leftmost-val rt))]
+       [else (_23tree-right-val rt p cmp?)])]
+    [(node3 lt k1 mt k2 rt)
+     (cond
+       [(cmp? k1 p) (or (_23tree-right-val lt p cmp?) (_leftmost-val mt))]
+       [(cmp? k2 p) (or (_23tree-right-val mt p cmp?) (_leftmost-val rt))]
+       [else (_23tree-right-val rt p cmp?)])]
+    [val #f]))
+
+(define (_23tree-ref t p cmp?)
+  (match t
     [(node2 l k r)
      (cond
-       [(cmp? k v)
-        (match/values (_23tree-get-triple l v cmp?)
-                      [(_ #f _) (values #f #f #f)]
-                      [(f s t) (let ([t_ (or t (breakpoint-p2 k))]) (values f s t_))])]
-       [else
-        (match/values (_23tree-get-triple r v cmp?)
-                      [(_ #f _) (values #f #f #f)]
-                      [(f s t) (let ([f_ (or f (breakpoint-p1 k))]) (values f_ s t))])])]
+       [(cmp? k p) (_23tree-ref l)]
+       [else (_23tree-ref r)])]
     [(node3 l k1 m k2 r)
      (cond
-       [(cmp? k1 v)
-        (match/values (_23tree-get-triple l v cmp?)
-                      [(_ #f _) (values #f #f #f)]
-                      [(f s t) (let ([t_ (or t (breakpoint-p2 k1))]) (values f s t_))])]
-       [(cmp? k2 v)
-        (match/values (_23tree-get-triple m v cmp?)
-                      [(_ #f _) (values #f #f #f)]
-                      [(f s t)
-                       (let ([f_ (or f (breakpoint-p1 k1))]
-                             [t_ (or t (breakpoint-p2 k2))])
-                         (values f_ s t_))])]
-       [else
-        (match/values (_23tree-get-triple r v cmp?)
-                      [(_ #f _) (values #f #f #f)]
-                      [(f s t) (let ([f_ (or f (breakpoint-p1 k2))]) (values f_ s t))])])]))
+       [(cmp? k1 p) (_23tree-ref l)]
+       [(cmp? k2 p) (_23tree-ref m)]
+       [else (_23tree-ref r)])]
+    [v v]))
 
-(define/match (23tree-get-triple t v)
-  [((root cmp? _ t) v) (_23tree-get-triple t v cmp?)])
+(define/match (23tree-ref t p)
+  [((struct root (cmp? _ t)) p) (_23tree-ref t p cmp?)])
+(define/match (23tree-left-val t p)
+  [((struct root (cmp? _ t)) p) (_23tree-left-val t p cmp?)])
+(define/match (23tree-right-val t p)
+  [((struct root (cmp? _ t)) p) (_23tree-right-val t p cmp?)])
+
+(define (arc->breakpoint t p)
+  (let ([left (23tree-left-val t p)]) (if left (breakpoint left p) ('leftmost))))
+
+(define (breakpoint->arc t bp l)
+  (define x (breakpoint->x bp l))
+  (match-define (root cmp? _ t) t)
+  (match t
+    [(node2 lt k rt)
+     #:when (eq? bp 'leftmost)
+     (_leftmost-val lt)]
+    [(node2 lt (== bp) rt) (_leftmost-val rt)]
+    [(node2 lt k rt)
+     #:when (< x (breakpoint->x k l))
+     (breakpoint->arc lt bp l)]
+    [(node2 lt k rt) (breakpoint->arc rt bp l)]
+    [(node3 lt k1 mt k2 rt)
+     #:when (eq? bp 'leftmost)
+     (_leftmost-val lt)]
+    [(node3 lt (== bp) mt k2 rt) (_leftmost-val mt)]
+    [(node3 lt k1 mt (== bp) rt) (_leftmost-val rt)]
+    [(node3 lt k1 mt k2 rt)
+     #:when (< x (breakpoint->x k1))
+     (breakpoint->arc lt bp l)]
+    [(node3 lt k1 mt k2 rt)
+     #:when (< x (breakpoint->x k2))
+     (breakpoint->arc mt bp l)]
+    [(node3 lt k1 mt k2 rt) (breakpoint->arc rt bp l)]))
+
+(define (_rightmost-key t)
+  (match t
+    [(node2 l k r) (or (_rightmost-key r) k)]
+    [(node3 l k1 m k2 r) (or (_rightmost-key r) k2)]
+    [_ #f]))
+
+(define (_leftmost-key t)
+  (match t
+    [(node2 l k r) (or (_leftmost-key l) k)]
+    [(node3 l k1 m k2 r) (or (_leftmost-key l) k1)]
+    [_ #f]))
+
+(define (_23tree-left-bp t bp l)
+  (define x (breakpoint->x bp l))
+  (match t
+    [(node2 lt (== bp) rt) (_rightmost-key lt)]
+    [(node2 lt k rt)
+     #:when (< x (breakpoint->x k l))
+     (_23tree-left-bp lt bp l)]
+    [(node2 lt k rt) (or (_23tree-left-bp rt bp l) k)]
+    [(node3 lt (== bp) mt k2 rt) (_rightmost-key lt)]
+    [(node3 lt k1 mt (== bp) rt) (or (_rightmost-key mt) k1)]
+    [(node3 lt k1 mt k2 rt)
+     #:when (< x (breakpoint->x k1 l))
+     (_23tree-left-bp lt bp l)]
+    [(node3 lt k1 mt k2 rt)
+     #:when (< x (breakpoint->x k2 l))
+     (or (_23tree-left-bp mt bp l) k1)]
+    [(node3 lt k1 mt k2 rt) (or (_23tree-left-bp rt bp l) k2)]
+    [_ #f]))
+
+(define (23tree-left-bp t bp l)
+  (match t
+    [(root _ _ t) (_23tree-left-bp t bp l)]))
+
+(define (_23tree-right-bp t bp l)
+  (define x (breakpoint->x bp l))
+  (match t
+    [(node2 lt (== bp) rt) (_leftmost-key lt)]
+    [(node2 lt k rt)
+     #:when (< x (breakpoint->x k l))
+     (or (_23tree-right-bp lt bp l) k)]
+    [(node2 lt k rt) (_23tree-right-bp rt bp l)]
+    [(node3 lt (== bp) mt k2 rt) (or (_leftmost-key mt) k2)]
+    [(node3 lt k1 mt (== bp) rt) (_leftmost-key rt)]
+    [(node3 lt k1 mt k2 rt)
+     #:when (< x (breakpoint->x k1 l))
+     (or (_23tree-right-bp lt bp l) k1)]
+    [(node3 lt k1 mt k2 rt)
+     #:when (< x (breakpoint->x k2 l))
+     (or (_23tree-right-bp mt bp l) k2)]
+    [(node3 lt k1 mt k2 rt) (_23tree-right-bp rt bp l)]
+    [_ #f]))
+
+(define (23tree-right-bp t bp l)
+  (match t
+    [(root _ _ t) (_23tree-right-bp t bp l)]))
 
 (define (_23tree-remove t v cmp? combine-keys)
   (define combine-inst (combine combine-keys))
@@ -290,6 +400,26 @@
 (define/match (breakpoint-merge l r)
   [((breakpoint l1 _) (breakpoint _ r2)) (breakpoint l1 r2)])
 
+(define (circle-center p1 p2 p3)
+  (match-let ([(point x1 y1 _) p1]
+              [(point x2 y2 _) p2]
+              [(point x3 y3 _) p3])
+    (let* ([s1 (+ (* x1 x1) (* y1 y1))]
+           [s2 (+ (* x2 x2) (* y2 y2))]
+           [s3 (+ (* x3 x3) (* y3 y3))]
+           [b (+ (* s1 (- y2 y3)) (* s2 (- y3 y1)) (* s3 (- y1 y2)))]
+           [a (+ (* x1 (- y2 y3)) (- (* y1 (- x2 x3))) (* x2 y3) (- (* x3 y2)))]
+           [c (+ (* s1 (- x3 x2)) (* s2 (- x1 x3)) (* s3 (- x2 x1)))])
+      (point (- (/ b (* 2 a))) (- (/ c (* 2 a)))))))
+
+; points define arcs at the leafs of our 2-3 tree.
+; we need to map circle event -> arc
+;   can be done via breakpoint: breakpoints are unique
+; we need to map arc -> circle event
+;   can also be done via pointer
+; arc uniquely defined by left breakpoint
+; have to query: breakpoint -> arc, arc -> left arc/right arc
+
 (define (voronoi . p)
   (define l (box 0))
   (define (bp-cmp breakpoint site)
@@ -299,12 +429,40 @@
   (define queue (apply bh:heap (lambda (p1 p2) ((point-y p1) . > . (point-y p2))) p))
   (define tree (23tree bp-cmp combine-keys))
 
-  (define site-event
-    (match-lambda
-      [(point x y removed)
+  (define (event p tree queue arc_ce_map)
+    (match p
+      [(point x y removed) ; site event
        (if (23tree-empty? tree)
-           (23tree-split (point x y removed))
-           (void))]))
+           (23tree-split p)
+           (let* ([m (23tree-ref tree p)]
+                  [m-ce (dict-ref arc_ce_map (arc->breakpoint m) #f)]
+                  [l (23tree-left-val tree m)]
+                  [r (23tree-right-val tree m)])
+             (begin
+               (if (point-circle-event m) (set-circle-removed! (point-circle-event m) #t) (void))
+               (let ([tree (23tree-split tree p)])
+                 (let-values ([(ml _ mr) (23tree-get-triple tree p)])
+                   (let* ([left-ce (if (point? ml)
+                                       (match-let ([(point cx cy _ _) (circle-center l ml p)])
+                                         (if (<= cy y) (point cx cy #f #t) #f))
+                                       #f)]
+                          [right-ce (if (point? mr)
+                                        (match-let ([(point cx cy _ _) (circle-center p mr r)])
+                                          (if (<= cy y) (point cx cy #f #t) #f))
+                                        #f)]
+                          [removed_ce (dict-ref arc_ce_map m #f)]
+                          [arc_ce_map (dict-remove arc_ce_map m)]
+                          [arc_ce_map (if left-ce (dict-set arc_ce_map ml left-ce) arc_ce_map)]
+                          [arc_ce_map (if right-ce (dict-set arc_ce_map mr right-ce) arc_ce_map)]
+                          [queue (if left-ce (bh:insert left-ce queue) queue)]
+                          [queue (if right-ce (bh:insert right-ce queue) queue)])
+                     (begin
+                       (if removed_ce (set-point-removed! removed_ce #t) (void))
+                       (values tree queue arc_ce_map))))))))]
+      [(circle x y bp removed) ; circle event
+       (let ([l (23tree-left-bp tree bp y)]
+             [r (23tree-right-bp tree bp y)])
+         (void))]))
 
   (let while ([queue queue]
               [tree tree]
@@ -313,9 +471,7 @@
         (void)
         (let ([next (bh:find-min/max queue)]
               [queue (bh:delete-min/max queue)])
-          (if (point? next)
-              ((site-event p) tree queue l)
-              (while queue tree))))))
+          (if (point? next) ((event p) tree queue l) (while queue tree))))))
 
 (module* test-tree racket
   (require (submod ".." debug))
@@ -331,7 +487,7 @@
 
   (define/match (arc p l)
     ; y = (1/2(y1 - l)) * (x^2 -2x1*x + y1^2 + x1^2 -l^2)
-    [((raw:point x1 y1 _) l)
+    [((raw:point x1 y1 _ _) l)
      (lambda (x)
        (* (/ 1 (* 2 (- y1 l))) (+ (* x x) (- (* 2 x1 x)) (* x1 x1) (* y1 y1) (- (* l l)))))])
   (plot (map (lambda (p) (function (arc p 8.99) 0 200 #:y-min 0 #:y-max 400)) points))
