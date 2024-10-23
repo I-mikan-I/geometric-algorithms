@@ -171,7 +171,9 @@
     [#f (TI v)]
     [(struct point _) (OF3 t (breakpoint t v) v (breakpoint v t) t)]
     [(struct node2 (l k r))
-     (if (cmp? k v) (balance (_23tree-split l v cmp?) k r) (balance l k (_23tree-split r v cmp?)))]
+     (if (cmp? k v)
+         (balance (_23tree-split l v cmp?) k r)
+         (balance l k (_23tree-split r v cmp?)))]
     [(struct node3 (l k1 m k2 r))
      (cond
        [(cmp? k1 v) (balance (_23tree-split l v cmp?) k1 m k2 r)]
@@ -247,7 +249,10 @@
   [((struct root (cmp? _ t)) (point x _ _) n) (_23tree-right-val t (point x n) cmp?)])
 
 (define (arc->breakpoint t p [y_ #f])
-  (let ([left (23tree-left-val t p y_)]) (if left (breakpoint left p) 'leftmost)))
+  (let ([left (23tree-left-val t p y_)])
+    (if left
+        (breakpoint left p)
+        'leftmost)))
 
 (define (breakpoint->arc t bp l)
   (define x (breakpoint->x bp l))
@@ -419,7 +424,14 @@
            [b (+ (* s1 (- y2 y3)) (* s2 (- y3 y1)) (* s3 (- y1 y2)))]
            [a (+ (* x1 (- y2 y3)) (- (* y1 (- x2 x3))) (* x2 y3) (- (* x3 y2)))]
            [c (+ (* s1 (- x3 x2)) (* s2 (- x1 x3)) (* s3 (- x2 x1)))])
-      (if (equal? a 0) (point 0 +inf.0) (point (- (/ b (* 2 a))) (- (/ c (* 2 a))))))))
+      (if (equal? a 0)
+          (point 0 +inf.0)
+          (let* ([x (/ b (* 2 a))]
+                 [y (/ c (* 2 a))]
+                 [r (sqrt (+ (* (- x x1) (- x x1)) (* (- y y1) (- y y1))))])
+            (if (>= (- y r) (min y1 y2 y3))
+                (point 0 +inf.0)
+                (point x (- y r))))))))
 
 ; points define arcs at the leafs of our 2-3 tree.
 ; we need to map circle event -> arc
@@ -458,52 +470,102 @@
                   [l (23tree-left-val tree m y)]
                   [r (23tree-right-val tree m y)])
              (begin
-               (if m-ce (set-circle-removed! m-ce #t) (void))
+               (printf "m-bp: ~v\n" m-bp)
+               (if m-ce
+                   ((begin
+                      (printf "removed circle ~v\n" m-ce)
+                      (set-circle-removed! m-ce #t)))
+                   (void))
                (let ([tree (23tree-split tree p)])
                  (let* ([left-ce (if (point? l)
                                      (match-let ([(point cx cy _) (circle-center l m p)])
-                                       (if (<= cy y) (circle cx cy (breakpoint l m)) #f))
+                                       (if (<= cy y)
+                                           (circle cx cy (breakpoint l m))
+                                           #f))
                                      #f)]
                         [right-ce (if (point? r)
                                       (match-let ([(point cx cy _) (circle-center p m r)])
-                                        (if (<= cy y) (circle cx cy (breakpoint p m)) #f))
+                                        (if (<= cy y)
+                                            (circle cx cy (breakpoint p m))
+                                            #f))
                                       #f)]
                         [arc_ce_map (dict-remove arc_ce_map m-bp)]
-                        [arc_ce_map
-                         (if left-ce (dict-set arc_ce_map (circle-bp left-ce) left-ce) arc_ce_map)]
-                        [arc_ce_map
-                         (if right-ce (dict-set arc_ce_map (circle-bp right-ce) right-ce) arc_ce_map)]
-                        [queue (if left-ce (bh:insert left-ce queue) queue)]
-                        [queue (if right-ce (bh:insert right-ce queue) queue)])
+                        [arc_ce_map (if left-ce
+                                        (dict-set arc_ce_map (circle-bp left-ce) left-ce)
+                                        arc_ce_map)]
+                        [arc_ce_map (if right-ce
+                                        (dict-set arc_ce_map (circle-bp right-ce) right-ce)
+                                        arc_ce_map)]
+                        [queue (if left-ce
+                                   (begin
+                                     (printf "inserted ce: ~v\n" left-ce)
+                                     (bh:insert left-ce queue))
+                                   queue)]
+                        [queue (if right-ce
+                                   (begin
+                                     (printf "inserted ce: ~v\n" right-ce)
+                                     (bh:insert right-ce queue))
+                                   queue)])
                    (values tree queue arc_ce_map))))))]
-      [(circle x y (and (breakpoint l p) bp) removed) ; circle event
+      [(circle x y (and (breakpoint l p) bp) #f) ; circle event
+       (printf "circle event y = ~v\n" y)
        (let* ([lbp (23tree-left-bp tree bp y)]
               [rbp (23tree-right-bp tree bp y)]
               [l-ce (dict-ref arc_ce_map lbp #f)]
               [r-ce (dict-ref arc_ce_map rbp #f)]
-              [ll (if (breakpoint? lbp) (breakpoint-p1 lbp) #f)]
-              [r (if (breakpoint? rbp) (breakpoint-p2 rbp) #f)]
-              [rr (if r (23tree-right-val tree r y) #f)]
+              [ll (if (breakpoint? lbp)
+                      (breakpoint-p1 lbp)
+                      #f)]
+              [r (if (breakpoint? rbp)
+                     (breakpoint-p2 rbp)
+                     #f)]
+              [rr (if r
+                      (23tree-right-val tree r y)
+                      #f)]
               [left-ce (if (and (point? ll) (point? r))
                            (match-let ([(point cx cy _) (circle-center ll l r)])
-                             (if (<= cy y) (circle cx cy (breakpoint ll l)) #f))
+                             (if (<= cy y)
+                                 (circle cx cy (breakpoint ll l))
+                                 #f))
                            #f)]
               [right-ce (if (and (point? l) (point? r) (point? rr))
                             (match-let ([(point cx cy _) (circle-center l r rr)])
-                              (if (<= cy y) (circle cx cy (breakpoint l r)) #f))
+                              (if (<= cy y)
+                                  (circle cx cy (breakpoint l r))
+                                  #f))
                             #f)]
               [arc_ce_map (dict-remove arc_ce_map lbp)]
               [arc_ce_map (dict-remove arc_ce_map rbp)]
               [arc_ce_map (dict-remove arc_ce_map bp)]
-              [arc_ce_map (if left-ce (dict-set arc_ce_map (circle-bp left-ce) left-ce) arc_ce_map)]
-              [arc_ce_map
-               (if right-ce (dict-set arc_ce_map (circle-bp right-ce) right-ce) arc_ce_map)]
-              [queue (if left-ce (bh:insert left-ce queue) queue)]
-              [queue (if right-ce (bh:insert right-ce queue) queue)]
+              [arc_ce_map (if left-ce
+                              (dict-set arc_ce_map (circle-bp left-ce) left-ce)
+                              arc_ce_map)]
+              [arc_ce_map (if right-ce
+                              (dict-set arc_ce_map (circle-bp right-ce) right-ce)
+                              arc_ce_map)]
+              [queue (if left-ce
+                         (bh:insert left-ce queue)
+                         queue)]
+              [queue (if right-ce
+                         (bh:insert right-ce queue)
+                         queue)]
               [tree (23tree-remove tree p y)])
          (begin
-           (if l-ce (set-circle-removed! l-ce #t) (void))
-           (if r-ce (set-circle-removed! r-ce #t) (void))
+           (printf "lbp: ~v, rbp: ~v, bp: ~v, l: ~v, r: ~v, p: ~v, ll: ~v, rr: ~v\n"
+                   lbp
+                   rbp
+                   bp
+                   l
+                   r
+                   p
+                   ll
+                   rr)
+           (if l-ce
+               (set-circle-removed! l-ce #t)
+               (void))
+           (if r-ce
+               (set-circle-removed! r-ce #t)
+               (void))
            (values tree queue arc_ce_map)))]
       ; removed event
       [_ (values tree queue arc_ce_map)]))
@@ -512,6 +574,7 @@
               [arc_ce_map arc_ce_map])
 
     (printf "while inorder: ~v\n" (23tree-inorder tree))
+    (printf "map ~v\n" (dict->list arc_ce_map))
     (cond
       [(bh:empty? queue) (void)]
       [else
@@ -537,10 +600,10 @@
     [((raw:point x1 y1 _) l)
      (lambda (x)
        (* (/ 1 (* 2 (- y1 l))) (+ (* x x) (- (* 2 x1 x)) (* x1 x1) (* y1 y1) (- (* l l)))))])
-  (plot (map (lambda (p) (function (arc p 8.99) 0 200 #:y-min 0 #:y-max 400)) points))
+  (plot (map (lambda (p) (function (arc p 8.99) 0 200 #:y-min -50 #:y-max 400)) points))
   (printf "inorder: ~v\n" (23tree-inorder t))
-  (define ref1 (23tree-ref t (raw:point 11 8.99)))
-  (printf "get-ref ~v ~v\n" (raw:point 11 8.99) ref1)
+  (define ref1 (23tree-ref t (raw:point 11 5)))
+  (printf "get-ref ~v ~v\n" (raw:point 11 5) ref1)
   (printf "get-left ~v\n" (23tree-left-val t (raw:point 11 8.99)))
   (printf "get-right ~v\n" (23tree-right-val t (raw:point 11 8.99)))
   (raw:voronoi (cons 5 14) (cons 15 12) (cons 25 10) (cons 13 9)))
