@@ -23,7 +23,7 @@
                  (-> breakpoint? breakpoint? breakpoint?)
                  (and/c 23tree-empty? 23tree-balanced?))]
             [23tree-split (-> 23tree-balanced? point? (and/c 23tree-balanced? (not/c 23tree-empty?)))]
-            [23tree-remove (->* (23tree-balanced? point?) (number?) 23tree-balanced?)]
+            [23tree-remove (->* (23tree-balanced? breakpoint? number?) 23tree-balanced?)]
             [23tree-inorder (-> 23tree-balanced? list?)]
             [23tree-left-val (->* (23tree-balanced? point?) (number?) (or/c point? #f))]
             [23tree-right-val (->* (23tree-balanced? point?) (number?) (or/c point? #f))]
@@ -200,6 +200,34 @@
     [(node3 l k1 m k2 r) (_leftmost-val l)]
     [val val]))
 
+(define (_remove-rightmost-val t combine-inst)
+  (match t
+    [(node2 l k r)
+     (let ([r_ (_remove-rightmost-val r)])
+       (if r_
+           (combine-inst l k r_)
+           (cons (cright k) (UF l))))]
+    [(node3 l k1 m k2 r)
+     (let ([r_ (_remove-rightmost-val r)])
+       (if r_
+           (combine-inst l k1 m k2 r_)
+           (cons (cright k2) (TI node2 l k1 m))))]
+    [val #f]))
+
+(define (_remove-leftmost-val t combine-inst)
+  (match t
+    [(node2 l k r)
+     (let ([l_ (_remove-leftmost-val l combine-inst)])
+       (if l_
+           (combine-inst (_remove-leftmost-val l) k r)
+           (cons (cleft k) (UF r))))]
+    [(node3 l k1 m k2 r)
+     (let ([l_ (_remove-leftmost-val l combine-inst)])
+       (if l_
+           (combine-inst (_remove-leftmost-val l) k1 m k2 r)
+           (cons (cleft k1) (TI node2 m k2 r))))]
+    [val #f]))
+
 (define (_23tree-left-val t p cmp?)
   (match t
     [(node2 lt k rt)
@@ -272,10 +300,10 @@
     [(node3 lt (== bp) mt k2 rt) (_leftmost-val mt)]
     [(node3 lt k1 mt (== bp) rt) (_leftmost-val rt)]
     [(node3 lt k1 mt k2 rt)
-     #:when (< x (breakpoint->x k1))
+     #:when (< x (breakpoint->x k1 l))
      (breakpoint->arc lt bp l)]
     [(node3 lt k1 mt k2 rt)
-     #:when (< x (breakpoint->x k2))
+     #:when (< x (breakpoint->x k2 l))
      (breakpoint->arc mt bp l)]
     [(node3 lt k1 mt k2 rt) (breakpoint->arc rt bp l)]))
 
@@ -337,24 +365,49 @@
   (match t
     [(root _ _ t) (_23tree-right-bp t bp l)]))
 
-(define (_23tree-remove t v cmp? combine-keys)
+(define (_23tree-remove t bp l cmp? combine-keys)
   (define combine-inst (combine combine-keys))
+  (define x (breakpoint->x bp l))
   (match t
-    [(node3 l k1 (== v) k2 r) (cons #f (TI (node2 l (combine-keys k1 k2) r)))]
-    [(node3 (== v) k1 m k2 r) (cons (cleft k1) (TI (node2 m k2 r)))]
-    [(node3 l k1 m k2 (== v)) (cons (cright k2) (TI (node2 l k1 m)))]
-    [(node3 l k1 m k2 r)
-     (cond
-       [(cmp? k1 v) (combine-inst (_23tree-remove l v cmp? combine) k1 m k2 r)]
-       [(cmp? k2 v) (combine-inst l k1 (_23tree-remove m v cmp? combine) k2 r)]
-       [else (combine-inst l k1 m k2 (_23tree-remove r v cmp? combine))])]
-    [(node2 (== v) k r) (cons (cleft k) (UF r))]
-    [(node2 l k (== v)) (cons (cright k) (UF l))]
-    [(node2 l k r)
-     (cond
-       [(cmp? k v) (combine-inst (_23tree-remove l v cmp? combine) k r)]
-       [else (combine-inst l k (_23tree-remove r v cmp? combine))])]
-    [_ (cons #f (TI #f))]))
+    [(node2 lt k rt)
+     #:when (eq? bp 'leftmost)
+     (let ([lt_ (_remove-leftmost-val lt combine-inst)])
+       (if lt_
+           (combine-inst lt_ k rt)
+           (cons (cleft k) (UF rt))))]
+    [(node2 lt (== bp) rt)
+
+     (let ([rt_ (_remove-leftmost-val rt combine-inst)])
+       (if rt_
+           (combine-inst lt bp rt_)
+           (cons (cright bp) (UF lt))))]
+    [(node2 lt k rt)
+     #:when (< x (breakpoint->x k l))
+     (combine-inst (_23tree-remove lt bp l cmp? combine-keys) k rt)]
+    [(node2 lt k rt) (combine-inst lt k (_23tree-remove rt bp l cmp? combine-keys))]
+    [(node3 lt k1 mt k2 rt)
+     #:when (eq? bp 'leftmost)
+     (let ([lt_ (_remove-leftmost-val lt combine-inst)])
+       (if lt_
+           (combine-inst lt_ k1 mt k2 rt)
+           (cons (cleft k1) (TI (node2 mt k2 rt)))))]
+    [(node3 lt (== bp) mt k2 rt)
+     (let ([mt_ (_remove-leftmost-val mt combine-inst)])
+       (if mt_
+           (combine-inst lt bp mt_ k2 rt)
+           (cons #f (TI (node2 lt (combine-keys bp k2) rt)))))]
+    [(node3 lt k1 mt (== bp) rt)
+     (let ([rt_ (_remove-leftmost-val rt combine-inst)])
+       (if rt_
+           (combine-inst lt k1 mt bp rt_)
+           (cons (cright bp) (TI (node2 lt bp mt)))))]
+    [(node3 lt k1 mt k2 rt)
+     #:when (< x (breakpoint->x k1 l))
+     (combine-inst (_23tree-remove lt bp l cmp? combine-keys) k1 mt k2 rt)]
+    [(node3 lt k1 mt k2 rt)
+     #:when (< x (breakpoint->x k2 l))
+     (combine-inst lt k1 (_23tree-remove mt bp l cmp? combine-keys) k2 rt)]
+    [(node3 lt k1 mt k2 rt) (combine-inst lt k1 mt k2 (_23tree-remove rt bp l cmp? combine-keys))]))
 
 (define (23tree-split t v)
   (match-let ([(struct root (cmp? _ root-node)) t])
@@ -363,11 +416,9 @@
       [(OF2 l k r) (struct-copy root t [t (node2 l k r)])]
       [(OF3 l k1 m k2 r) (struct-copy root t [t (node3 l k1 m k2 r)])])))
 
-(define (23tree-remove t v [y #f])
-  (match (match/values (values t v y)
-                       [((root cmp? combine-keys t) v #f) (_23tree-remove t v cmp? combine-keys)]
-                       [((root cmp? combine-keys t) (point x _ _) n)
-                        (_23tree-remove t (point x n) cmp? combine-keys)])
+(define (23tree-remove t bp l)
+  (match (match/values (values t bp l)
+                       [((root cmp? combine-keys t) bp l) (_23tree-remove t bp l cmp? combine-keys)])
     [(cons _ (or (UF root-node) (TI root-node))) (struct-copy root t [t root-node])]))
 
 ;; TODO ------------------------------------------
@@ -479,13 +530,13 @@
                (let ([tree (23tree-split tree p)])
                  (let* ([left-ce (if (point? l)
                                      (match-let ([(point cx cy _) (circle-center l m p)])
-                                       (if (<= cy y)
+                                       (if (< cy y)
                                            (circle cx cy (breakpoint l m))
                                            #f))
                                      #f)]
                         [right-ce (if (point? r)
                                       (match-let ([(point cx cy _) (circle-center p m r)])
-                                        (if (<= cy y)
+                                        (if (< cy y)
                                             (circle cx cy (breakpoint p m))
                                             #f))
                                       #f)]
@@ -522,15 +573,15 @@
               [rr (if r
                       (23tree-right-val tree r y)
                       #f)]
-              [left-ce (if (and (point? ll) (point? r))
+              [left-ce (if (and (point? ll) (point? l) (point? r))
                            (match-let ([(point cx cy _) (circle-center ll l r)])
-                             (if (<= cy y)
+                             (if (< cy y)
                                  (circle cx cy (breakpoint ll l))
                                  #f))
                            #f)]
               [right-ce (if (and (point? l) (point? r) (point? rr))
                             (match-let ([(point cx cy _) (circle-center l r rr)])
-                              (if (<= cy y)
+                              (if (< cy y)
                                   (circle cx cy (breakpoint l r))
                                   #f))
                             #f)]
@@ -549,7 +600,7 @@
               [queue (if right-ce
                          (bh:insert right-ce queue)
                          queue)]
-              [tree (23tree-remove tree p y)])
+              [tree (23tree-remove tree bp y)])
          (begin
            (printf "lbp: ~v, rbp: ~v, bp: ~v, l: ~v, r: ~v, p: ~v, ll: ~v, rr: ~v\n"
                    lbp
@@ -600,7 +651,7 @@
     [((raw:point x1 y1 _) l)
      (lambda (x)
        (* (/ 1 (* 2 (- y1 l))) (+ (* x x) (- (* 2 x1 x)) (* x1 x1) (* y1 y1) (- (* l l)))))])
-  (plot (map (lambda (p) (function (arc p 8.99) 0 200 #:y-min -50 #:y-max 400)) points))
+  (plot (map (lambda (p) (function (arc p 0) 0 200 #:y-min -50 #:y-max 400)) points))
   (printf "inorder: ~v\n" (23tree-inorder t))
   (define ref1 (23tree-ref t (raw:point 11 5)))
   (printf "get-ref ~v ~v\n" (raw:point 11 5) ref1)
