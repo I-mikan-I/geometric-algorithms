@@ -16,6 +16,7 @@
             [breakpoint? (-> any/c boolean?)]
             [point? (-> any/c boolean?)]
             [breakpoint->x (-> breakpoint? number? number?)]
+            [breakpoint->xy (-> breakpoint? number? (cons/c number? number?))]
             [cmp-bp-p (-> breakpoint? point? number? boolean?)]
             [breakpoint-merge (-> breakpoint? breakpoint? breakpoint?)]
             [23tree
@@ -70,7 +71,7 @@
             [_ min_dist])))))
 
 ;; voronoi diagrams
-(struct point (x y [removed #:auto #:mutable]) #:auto-value #f #:transparent)
+(struct point (x y) #:transparent)
 (struct breakpoint (p1 p2) #:transparent)
 (struct circle (x y bp [removed #:auto #:mutable]) #:auto-value #f #:transparent)
 
@@ -268,13 +269,13 @@
     [v v]))
 (define/match (23tree-ref t p [y_ #f])
   [((struct root (cmp? _ t)) p #f) (_23tree-ref t p cmp?)]
-  [((struct root (cmp? _ t)) (point x _ _) n) (_23tree-ref t (point x n) cmp?)])
+  [((struct root (cmp? _ t)) (point x _) n) (_23tree-ref t (point x n) cmp?)])
 (define/match (23tree-left-val t p [y_ #f])
   [((struct root (cmp? _ t)) p #f) (_23tree-left-val t p cmp?)]
-  [((struct root (cmp? _ t)) (point x _ _) n) (_23tree-left-val t (point x n) cmp?)])
+  [((struct root (cmp? _ t)) (point x _) n) (_23tree-left-val t (point x n) cmp?)])
 (define/match (23tree-right-val t p [y_ #f])
   [((struct root (cmp? _ t)) p #f) (_23tree-right-val t p cmp?)]
-  [((struct root (cmp? _ t)) (point x _ _) n) (_23tree-right-val t (point x n) cmp?)])
+  [((struct root (cmp? _ t)) (point x _) n) (_23tree-right-val t (point x n) cmp?)])
 
 (define (arc->breakpoint t p [y_ #f])
   (let ([left (23tree-left-val t p y_)])
@@ -425,8 +426,8 @@
 
 (struct vertex (neighbors) #:transparent)
 
-(define (breakpoint->x bp l)
-  (match-let ([(breakpoint (point x1 y1 _) (point x2 y2 _)) bp])
+(define (breakpoint->xy bp l)
+  (match-let ([(breakpoint (point x1 y1) (point x2 y2)) bp])
     ; (printf "x1: ~v y1: ~v x2: ~v y2: ~v l: ~v\n" x1 y1 x2 y2 l)
     ; arc point1: (l - y) = sqrt ((x1 - x)^2 + (y1 - y)^2)
     ; .. (l - y)^2 = (x1 - x)^2 + (y1 - y)^2
@@ -453,8 +454,19 @@
            [a (- f2 f1)]
            [b (* 2 (- (* f1 x1) (* f2 x2)))]
            [c r]
-           [op -])
-      (/ (op (- b) (sqrt (- (* b b) (* 4 a c)))) (* 2 a)))))
+           [op -]
+           [x (/ (op (- b) (sqrt (- (* b b) (* 4 a c)))) (* 2 a))]
+           [y (* f1 (+ (* x x) (- (* 2 x1 x)) (* y1 y1) (* x1 x1) (- (* l l))))])
+      (cons x y))))
+
+(define (arc->y p x l)
+  (match-let ([(point x1 y1) p])
+    (let* ([f1 (/ 1 (* 2 (- y1 l)))]
+           [y (* f1 (+ (* x x) (- (* 2 x1 x)) (* y1 y1) (* x1 x1) (- (* l l))))])
+      y)))
+
+(define (breakpoint->x bp l)
+  (car (breakpoint->xy bp l)))
 ;; p is list of points
 (define (cmp-bp-p bp p l)
   (let ([bp-x (breakpoint->x bp l)])
@@ -466,9 +478,9 @@
 
 (define (circle-center p1 p2 p3)
   (printf "p1: ~a, p2: ~a, p3: ~a\n" p1 p2 p3)
-  (match-let ([(point x1 y1 _) p1]
-              [(point x2 y2 _) p2]
-              [(point x3 y3 _) p3])
+  (match-let ([(point x1 y1) p1]
+              [(point x2 y2) p2]
+              [(point x3 y3) p3])
     (let* ([s1 (+ (* x1 x1) (* y1 y1))]
            [s2 (+ (* x2 x2) (* y2 y2))]
            [s3 (+ (* x3 x3) (* y3 y3))]
@@ -501,20 +513,22 @@
     (apply bh:heap
            (lambda (p1 p2)
              ((match p1
-                [(point _ y _) y]
+                [(point _ y) y]
                 [(circle _ y _ _) y])
               . > .
               (match p2
-                [(point _ y _) y]
+                [(point _ y) y]
                 [(circle _ y _ _) y])))
            p))
   (define tree (23tree bp-cmp combine-keys))
   (define arc_ce_map (hash))
-  (define (event p tree queue arc_ce_map)
+  (define bp_node_map (hash))
+  (define graph (hash)) ; adjacency lists
+  (define (event p tree queue arc_ce_map graph bp_node_map)
     (match p
-      [(point x y removed) ; site event
+      [(point x y) ; site event
        (if (23tree-empty? tree)
-           (values (23tree-split tree p) queue arc_ce_map)
+           (values (23tree-split tree p) queue arc_ce_map graph bp_node_map)
            (let* ([m (23tree-ref tree p)]
                   [m-bp (arc->breakpoint tree m y)]
                   [m-ce (dict-ref arc_ce_map m-bp #f)]
@@ -528,14 +542,21 @@
                       (set-circle-removed! m-ce #t)))
                    (void))
                (let ([tree (23tree-split tree p)])
-                 (let* ([left-ce (if (point? l)
-                                     (match-let ([(point cx cy _) (circle-center l m p)])
+                 ;; get both new breakpoints, create new node starting edge.
+                 ;; associate node to both breakpoints
+                 ;; on circle event, create final node ending edge. and connect in adjacency list
+                 (let* ([bp-node (cons (point-x p) (arc->y m (point-x p) (point-y p)))]
+                        [graph (dict-set graph bp-node '())]
+                        [bp_node_map
+                         (dict-set* bp_node_map (breakpoint m p) bp-node (breakpoint p m) bp-node)]
+                        [left-ce (if (point? l)
+                                     (match-let ([(point cx cy) (circle-center l m p)])
                                        (if (< cy y)
                                            (circle cx cy (breakpoint l m))
                                            #f))
                                      #f)]
                         [right-ce (if (point? r)
-                                      (match-let ([(point cx cy _) (circle-center p m r)])
+                                      (match-let ([(point cx cy) (circle-center p m r)])
                                         (if (< cy y)
                                             (circle cx cy (breakpoint p m))
                                             #f))
@@ -557,11 +578,20 @@
                                      (printf "inserted ce: ~v\n" right-ce)
                                      (bh:insert right-ce queue))
                                    queue)])
-                   (values tree queue arc_ce_map))))))]
+                   (values tree queue arc_ce_map graph bp_node_map))))))]
       [(circle x y (and (breakpoint l p) bp) #f) ; circle event
        (printf "circle event y = ~v\n" y)
        (let* ([lbp (23tree-left-bp tree bp y)]
               [rbp (23tree-right-bp tree bp y)]
+              [node-left (dict-ref bp_node_map bp)]
+              [node-right (dict-ref bp_node_map rbp)]
+              [new-node (breakpoint->xy bp y)]
+              [graph (dict-set graph new-node (list node-left node-right))]
+              [graph (foldl (lambda (key graph)
+                              (dict-update graph key (lambda (adj_list) (cons new-node adj_list))))
+                            graph
+                            (list node-left node-right))]
+              [bp_node_map (dict-remove (dict-remove bp_node_map lbp) bp)]
               [l-ce (dict-ref arc_ce_map lbp #f)]
               [r-ce (dict-ref arc_ce_map rbp #f)]
               [ll (if (breakpoint? lbp)
@@ -573,14 +603,15 @@
               [rr (if r
                       (23tree-right-val tree r y)
                       #f)]
+              [bp_node_map (dict-set bp_node_map (breakpoint l r) new-node)]
               [left-ce (if (and (point? ll) (point? l) (point? r))
-                           (match-let ([(point cx cy _) (circle-center ll l r)])
+                           (match-let ([(point cx cy) (circle-center ll l r)])
                              (if (< cy y)
                                  (circle cx cy (breakpoint ll l))
                                  #f))
                            #f)]
               [right-ce (if (and (point? l) (point? r) (point? rr))
-                            (match-let ([(point cx cy _) (circle-center l r rr)])
+                            (match-let ([(point cx cy) (circle-center l r rr)])
                               (if (< cy y)
                                   (circle cx cy (breakpoint l r))
                                   #f))
@@ -617,22 +648,25 @@
            (if r-ce
                (set-circle-removed! r-ce #t)
                (void))
-           (values tree queue arc_ce_map)))]
+           (values tree queue arc_ce_map graph bp_node_map)))]
       ; removed event
       [_ (values tree queue arc_ce_map)]))
   (let while ([tree tree]
               [queue queue]
-              [arc_ce_map arc_ce_map])
+              [arc_ce_map arc_ce_map]
+              [graph graph]
+              [bp_node_map bp_node_map])
 
     (printf "while inorder: ~v\n" (23tree-inorder tree))
     (printf "map ~v\n" (dict->list arc_ce_map))
     (cond
-      [(bh:empty? queue) (void)]
+      [(bh:empty? queue) graph]
       [else
        (let*-values ([(next-event) (bh:find-min/max queue)]
                      [(queue) (bh:delete-min/max queue)]
-                     [(tree queue arc_ce_map) (event next-event tree queue arc_ce_map)])
-         (while tree queue arc_ce_map))])))
+                     [(tree queue arc_ce_map graph bp_node_map)
+                      (event next-event tree queue arc_ce_map graph bp_node_map)])
+         (while tree queue arc_ce_map graph bp_node_map))])))
 
 (module* test-tree racket
   (require (submod ".." debug))
@@ -640,24 +674,31 @@
 
   (plot-new-window? #t)
   (define t (23tree (lambda (bp p) (cmp-bp-p bp p (raw:point-y p))) breakpoint-merge))
-  (define points (list (raw:point 5 14) (raw:point 15 12) (raw:point 25 10) (raw:point 13 9)))
+  (define ps (list (raw:point 5 14) (raw:point 15 12) (raw:point 25 10) (raw:point 13 9)))
   (set! t
-        (for/fold ([t t]) ([p points])
+        (for/fold ([t t]) ([p ps])
           (printf "inorder: ~v\n" (23tree-inorder t))
           (23tree-split t p)))
 
   (define/match (arc p l)
     ; y = (1/2(y1 - l)) * (x^2 -2x1*x + y1^2 + x1^2 -l^2)
-    [((raw:point x1 y1 _) l)
+    [((raw:point x1 y1) l)
      (lambda (x)
        (* (/ 1 (* 2 (- y1 l))) (+ (* x x) (- (* 2 x1 x)) (* x1 x1) (* y1 y1) (- (* l l)))))])
-  (plot (map (lambda (p) (function (arc p 0) 0 200 #:y-min -50 #:y-max 400)) points))
+  ; (plot (map (lambda (p) (function (arc p 0) 0 200 #:y-min -50 #:y-max 400)) points))
   (printf "inorder: ~v\n" (23tree-inorder t))
   (define ref1 (23tree-ref t (raw:point 11 5)))
   (printf "get-ref ~v ~v\n" (raw:point 11 5) ref1)
   (printf "get-left ~v\n" (23tree-left-val t (raw:point 11 8.99)))
   (printf "get-right ~v\n" (23tree-right-val t (raw:point 11 8.99)))
-  (raw:voronoi (cons 5 14) (cons 15 12) (cons 25 10) (cons 13 9)))
+
+  (define graph (raw:voronoi (cons 5 14) (cons 15 12) (cons 25 10) (cons 13 9)))
+  (define pl_lines
+    (for*/list ([(n v) (in-dict graph)]
+                [n2 v])
+      (lines `((,(car n) ,(cdr n)) (,(car n2) ,(cdr n2))))))
+  (printf "\nfinal graph: ~v\n" graph)
+  (plot (cons (points (map (lambda (p) (list (raw:point-x p) (raw:point-y p))) ps)) pl_lines)))
 
 (module+ test
   (define data '((0 . 1) (5 . 1) (8 . 1) (100 . 1) (101 . 1) (-20 . 1)))
