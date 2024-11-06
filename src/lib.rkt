@@ -504,6 +504,14 @@
 ; arc uniquely defined by left breakpoint
 ; have to query: breakpoint -> arc, arc -> left arc/right arc
 
+(define (close-graph graph_ bp_node_map l)
+  (define graph
+    (for/fold ([graph graph_]) ([(k v) (in-dict bp_node_map)])
+      (let* ([new-node (breakpoint->xy k l)]
+             [graph (dict-update graph v (lambda (adj-list) (cons new-node adj-list)))])
+        (dict-set graph new-node (list v)))))
+  graph)
+
 (define (voronoi . p_)
   (define (bp-cmp bp site)
     (cmp-bp-p bp site (point-y site)))
@@ -591,7 +599,7 @@
                               (dict-update graph key (lambda (adj_list) (cons new-node adj_list))))
                             graph
                             (list node-left node-right))]
-              [bp_node_map (dict-remove (dict-remove bp_node_map lbp) bp)]
+              [bp_node_map (dict-remove (dict-remove bp_node_map rbp) bp)]
               [l-ce (dict-ref arc_ce_map lbp #f)]
               [r-ce (dict-ref arc_ce_map rbp #f)]
               [ll (if (breakpoint? lbp)
@@ -655,18 +663,22 @@
               [queue queue]
               [arc_ce_map arc_ce_map]
               [graph graph]
-              [bp_node_map bp_node_map])
+              [bp_node_map bp_node_map]
+              [y_min 0])
 
     (printf "while inorder: ~v\n" (23tree-inorder tree))
     (printf "map ~v\n" (dict->list arc_ce_map))
     (cond
-      [(bh:empty? queue) graph]
+      [(bh:empty? queue) (close-graph graph bp_node_map (- y_min 10))]
       [else
        (let*-values ([(next-event) (bh:find-min/max queue)]
+                     [(y_min) (if (point? next-event)
+                                  (point-y next-event)
+                                  (circle-y next-event))]
                      [(queue) (bh:delete-min/max queue)]
                      [(tree queue arc_ce_map graph bp_node_map)
                       (event next-event tree queue arc_ce_map graph bp_node_map)])
-         (while tree queue arc_ce_map graph bp_node_map))])))
+         (while tree queue arc_ce_map graph bp_node_map y_min))])))
 
 (module* test-tree racket
   (require (submod ".." debug))
